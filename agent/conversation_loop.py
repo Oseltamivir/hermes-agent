@@ -3810,6 +3810,16 @@ def run_conversation(
 
                 agent._execute_tool_calls(assistant_message, messages, effective_task_id, api_call_count)
 
+                # AB_HARNESS_HERMES_PATCH_AGENTDIET_BEGIN
+                # AgentDiet-style delayed step reduction (Agent_Bench port of the
+                # FSE'26 artifact). Runs once per tool round, after this round's
+                # tool results are in `messages`, and rewrites the step
+                # ctx_after rounds back in place. Inert unless HERMES_AGENTDIET=1.
+                if os.environ.get("HERMES_AGENTDIET", "0") == "1":
+                    from agent.agentdiet_reflect import maybe_reduce_step
+                    maybe_reduce_step(agent, messages)
+                # AB_HARNESS_HERMES_PATCH_AGENTDIET_END
+
                 if agent._tool_guardrail_halt_decision is not None:
                     decision = agent._tool_guardrail_halt_decision
                     _turn_exit_reason = "guardrail_halt"
