@@ -378,6 +378,28 @@ def compress_context(
             old_title = agent._session_db.get_session_title(agent.session_id)
             # Trigger memory extraction on the old session before it rotates.
             agent.commit_memory_session(messages)
+            # AB_HARNESS_HERMES_PATCH_COMPACTION_PERSIST_BEGIN
+            # Persist the parent's full message history into ITS session row
+            # before the split ends it (upstream #92080): hermes serializes
+            # messages only at clean session end, so without this flush the
+            # compression-ended parent exports messages:[] and the entire
+            # pre-compaction transcript is unrecoverable (api_call_count
+            # records the work, nothing records the words). session_id still
+            # points at the parent here; _persist_session flushes through the
+            # _last_flushed_db_idx cursor (no duplicates, #860) and the
+            # rotation below resets that cursor for the child. compress()
+            # copies messages before pruning, so this list is the untouched
+            # parent history. Failure must not block the rotation: the run
+            # then merely degrades to stock lossy behaviour.
+            try:
+                agent._persist_session(messages)
+            except Exception as _ab_pc_err:
+                logger.warning(
+                    "pre-compaction transcript persist failed - parent "
+                    "session %s will export messages:[] (lost_compaction): %s",
+                    agent.session_id, _ab_pc_err,
+                )
+            # AB_HARNESS_HERMES_PATCH_COMPACTION_PERSIST_END
             agent._session_db.end_session(agent.session_id, "compression")
             old_session_id = agent.session_id
             agent.session_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
