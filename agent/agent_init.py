@@ -1240,6 +1240,17 @@ def init_agent(
     compression_abort_on_summary_failure = str(
         _compression_cfg.get("abort_on_summary_failure", False)
     ).lower() in {"true", "1", "yes"}
+    # Optional override for the compaction trigger floor (default 64K). Lets
+    # short trajectories on large-context models compact when set low; falls
+    # back to the HERMES_MIN_CONTEXT_LENGTH env var / MINIMUM_CONTEXT_LENGTH
+    # inside the compressor. None when unset → default behavior preserved.
+    _raw_min_ctx = _compression_cfg.get("min_context_length", None)
+    try:
+        compression_min_context_length = (
+            int(_raw_min_ctx) if _raw_min_ctx is not None else None
+        )
+    except (TypeError, ValueError):
+        compression_min_context_length = None
 
     # Read optional explicit context_length override for the auxiliary
     # compression model. Custom endpoints often cannot report this via
@@ -1457,6 +1468,7 @@ def init_agent(
             provider=agent.provider,
             api_mode=agent.api_mode,
             abort_on_summary_failure=compression_abort_on_summary_failure,
+            min_context_length=compression_min_context_length,
         )
     agent.compression_enabled = compression_enabled
 

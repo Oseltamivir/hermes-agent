@@ -132,6 +132,39 @@ DEFAULT_FALLBACK_CONTEXT = CONTEXT_PROBE_TIERS[0]
 # Sessions, model switches, and cron jobs should reject models below this.
 MINIMUM_CONTEXT_LENGTH = 64_000
 
+
+# AB_HARNESS_HERMES_PATCH_COMPACTION_FLOOR_BEGIN
+def resolve_compression_floor(config_min: int | None = None) -> int:
+    """Resolve the compaction trigger floor (NOT the model-rejection minimum).
+
+    The compressor's threshold is ``max(context_length * pct, floor)``.  By
+    default the floor is ``MINIMUM_CONTEXT_LENGTH`` (64K), which means short
+    trajectories on large-context local models never compact.  This resolver
+    lets that floor be lowered for benchmarks / experiments that want to force
+    compaction at smaller sizes, in priority order:
+
+      1. explicit ``config_min`` (``compression.min_context_length`` in config)
+      2. ``HERMES_MIN_CONTEXT_LENGTH`` env var
+      3. ``MINIMUM_CONTEXT_LENGTH`` default
+
+    Only positive integers are honored; anything else falls through. This does
+    NOT change model-rejection logic, which keeps using MINIMUM_CONTEXT_LENGTH.
+    """
+    if isinstance(config_min, int) and config_min > 0:
+        return config_min
+    env_val = os.environ.get("HERMES_MIN_CONTEXT_LENGTH")
+    if env_val:
+        try:
+            parsed = int(env_val)
+            if parsed > 0:
+                return parsed
+        except (TypeError, ValueError):
+            logger.warning(
+                "Ignoring non-integer HERMES_MIN_CONTEXT_LENGTH=%r", env_val
+            )
+    return MINIMUM_CONTEXT_LENGTH
+# AB_HARNESS_HERMES_PATCH_COMPACTION_FLOOR_END
+
 # Thin fallback defaults — only broad model family patterns.
 # These fire only when provider is unknown AND models.dev/OpenRouter/Anthropic
 # all miss. Replaced the previous 80+ entry dict.

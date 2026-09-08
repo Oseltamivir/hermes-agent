@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional
 from agent.auxiliary_client import call_llm, _is_connection_error
 from agent.context_engine import ContextEngine
 from agent.model_metadata import (
-    MINIMUM_CONTEXT_LENGTH,
+    resolve_compression_floor,
     get_model_context_length,
     estimate_messages_tokens_rough,
 )
@@ -499,7 +499,7 @@ class ContextCompressor(ContextEngine):
         self.context_length = context_length
         self.threshold_tokens = max(
             int(context_length * self.threshold_percent),
-            MINIMUM_CONTEXT_LENGTH,
+            self.min_context_length,
         )
         # Recalculate token budgets for the new context length so the
         # compressor stays calibrated after a model switch (e.g. 200K → 32K).
@@ -524,6 +524,7 @@ class ContextCompressor(ContextEngine):
         provider: str = "",
         api_mode: str = "",
         abort_on_summary_failure: bool = False,
+        min_context_length: int | None = None,
     ):
         self.model = model
         self.base_url = base_url
@@ -531,6 +532,12 @@ class ContextCompressor(ContextEngine):
         self.provider = provider
         self.api_mode = api_mode
         self.threshold_percent = threshold_percent
+        # Compaction trigger floor: defaults to MINIMUM_CONTEXT_LENGTH (64K) but
+        # can be lowered via compression.min_context_length config or the
+        # HERMES_MIN_CONTEXT_LENGTH env var so short trajectories on
+        # large-context models can still compact (e.g. eviction-vs-compaction
+        # benchmarks). Does not affect model-rejection logic.
+        self.min_context_length = resolve_compression_floor(min_context_length)
         self.protect_first_n = protect_first_n
         self.protect_last_n = protect_last_n
         self.summary_target_ratio = max(0.10, min(summary_target_ratio, 0.80))
@@ -546,13 +553,14 @@ class ContextCompressor(ContextEngine):
             config_context_length=config_context_length,
             provider=provider,
         )
-        # Floor: never compress below MINIMUM_CONTEXT_LENGTH tokens even if
+        # Floor: never compress below self.min_context_length tokens even if
         # the percentage would suggest a lower value.  This prevents premature
         # compression on large-context models at 50% while keeping the % sane
-        # for models right at the minimum.
+        # for models right at the minimum.  The floor defaults to
+        # MINIMUM_CONTEXT_LENGTH but is overridable (see resolve_compression_floor).
         self.threshold_tokens = max(
             int(self.context_length * threshold_percent),
-            MINIMUM_CONTEXT_LENGTH,
+            self.min_context_length,
         )
         self.compression_count = 0
 

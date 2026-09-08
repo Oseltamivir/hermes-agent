@@ -924,6 +924,10 @@ DEFAULT_CONFIG = {
     "compression": {
         "enabled": True,
         "threshold": 0.50,            # compress when context usage exceeds this ratio
+        "min_context_length": None,   # compaction floor override (default 64K via
+                                      # MINIMUM_CONTEXT_LENGTH / HERMES_MIN_CONTEXT_LENGTH).
+                                      # Set low to force compaction on short trajectories;
+                                      # null = default. Threshold = max(ctx*threshold, floor).
         "target_ratio": 0.20,         # fraction of threshold to preserve as recent tail
         "protect_last_n": 20,         # minimum recent messages to keep uncompressed
         "hygiene_hard_message_limit": 400,  # gateway session-hygiene force-compress threshold by message count
