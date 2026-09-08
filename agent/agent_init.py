@@ -254,6 +254,32 @@ def init_agent(
     """
     _install_safe_stdio()
 
+    # AB_HARNESS_HERMES_PATCH_MAX_ITERATIONS_BEGIN
+    # Env override for the tool-calling iteration budget.
+    #
+    # hermes_cli/oneshot.py builds its AIAgent() WITHOUT passing max_iterations,
+    # so the `-z` one-shot path Agent_Bench drives takes the 90 default above and
+    # never consults agent.max_turns in config.yaml (only tui_gateway's
+    # _cfg_max_turns does). That made every Agent_Bench recording silently capped
+    # at 90 LLM requests per session regardless of the harness profile: on the
+    # 08-25 clean full89 corpus, 16 of 89 runs end at EXACTLY 90 requests and
+    # none exceeds it. Overriding here rather than in oneshot.py covers every
+    # entry point that omits the argument, and matches how the other Agent_Bench
+    # Hermes knobs are driven (HERMES_MIN_CONTEXT_LENGTH etc.).
+    #
+    # The budget is shared with subagents by construction (the IterationBudget
+    # below), so this raises subagent depth too -- intended, and arm-definition
+    # state: report it per-arm. Unset or unparseable leaves stock behavior.
+    _ab_max_iter = os.environ.get("HERMES_MAX_ITERATIONS", "").strip()
+    if _ab_max_iter:
+        try:
+            _ab_v = int(_ab_max_iter)
+        except (TypeError, ValueError):
+            _ab_v = 0
+        if _ab_v > 0:
+            max_iterations = _ab_v
+    # AB_HARNESS_HERMES_PATCH_MAX_ITERATIONS_END
+
     agent.model = model
     agent.max_iterations = max_iterations
     # Shared iteration budget — parent creates, children inherit.
