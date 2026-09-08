@@ -2189,6 +2189,16 @@ def check_terminal_requirements() -> bool:
 
         elif env_type == "docker":
             from tools.environments.docker import find_docker
+            # AB_HARNESS_HERMES_PATCH_EXEC_BRIDGE_REQUIREMENTS_BEGIN
+            if os.getenv("HERMES_EXEC_BRIDGE"):
+                ok = bool(
+                    os.getenv("HERMES_EXEC_BRIDGE_SOCKET")
+                    and os.getenv("HERMES_EXEC_BRIDGE_TOKEN")
+                )
+                if not ok:
+                    logger.error("HERMES_EXEC_BRIDGE requires socket and token env vars")
+                return ok
+            # AB_HARNESS_HERMES_PATCH_EXEC_BRIDGE_REQUIREMENTS_END
             docker = find_docker()
             if not docker:
                 logger.error("Docker executable not found in PATH or common install locations")

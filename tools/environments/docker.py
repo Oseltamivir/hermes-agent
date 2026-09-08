@@ -5,6 +5,7 @@ configurable resource limits (CPU, memory, disk), and optional filesystem
 persistence via bind mounts.
 """
 
+import json
 import logging
 import os
 import re
@@ -313,13 +314,41 @@ class DockerEnvironment(BaseEnvironment):
         self._forward_env = _normalize_forward_env_names(forward_env)
         self._env = _normalize_env_dict(env)
         self._container_id: Optional[str] = None
+        self._bridge = os.environ.get("HERMES_EXEC_BRIDGE", "")
+        self._bridge_socket = os.environ.get("HERMES_EXEC_BRIDGE_SOCKET", "")
+        self._bridge_token = os.environ.get("HERMES_EXEC_BRIDGE_TOKEN", "")
         logger.info(f"DockerEnvironment volumes: {volumes}")
         # Ensure volumes is a list (config.yaml could be malformed)
         if volumes is not None and not isinstance(volumes, list):
             logger.warning(f"docker_volumes config is not a list: {volumes!r}")
             volumes = []
 
-        # Fail fast if Docker is not available.
+        # AB_HARNESS_HERMES_PATCH_EXEC_BRIDGE_BEGIN
+        # Agent_Bench pre-starts the SWE-bench task container and exports
+        # HERMES_EXEC_BRIDGE*. Keep Hermes on its normal docker backend, but
+        # skip local Docker container creation; _run_bash below routes every
+        # docker exec through the bridge. This mirrors OpenClaw's external
+        # exec patch: upstream workflow remains "docker", while Agent_Bench
+        # owns the actual task-container lifecycle.
+        if self._bridge:
+            if not self._bridge_socket or not self._bridge_token:
+                raise RuntimeError(
+                    "HERMES_EXEC_BRIDGE_SOCKET and HERMES_EXEC_BRIDGE_TOKEN "
+                    "are required when HERMES_EXEC_BRIDGE is set"
+                )
+            self._workspace_dir = None
+            self._home_dir = None
+            self._init_env_args = self._build_init_env_args()
+            self._docker_exe = "docker"
+            self._container_id = "agent-bench-bridge"
+            logger.info(
+                "DockerEnvironment using Agent_Bench exec bridge instead of "
+                "creating a Docker container"
+            )
+            self.init_session()
+            return
+        # AB_HARNESS_HERMES_PATCH_EXEC_BRIDGE_END
+
         _ensure_docker_available()
 
         # Build resource limit args
@@ -566,6 +595,20 @@ class DockerEnvironment(BaseEnvironment):
             args.extend(["-e", f"{key}={exec_env[key]}"])
         return args
 
+    @staticmethod
+    def _env_args_to_dict(env_args: list[str]) -> dict[str, str]:
+        """Convert docker exec -e KEY=VALUE args into a bridge env dict."""
+        env: dict[str, str] = {}
+        idx = 0
+        while idx < len(env_args):
+            if env_args[idx] == "-e" and idx + 1 < len(env_args):
+                item = env_args[idx + 1]
+                if "=" in item:
+                    key, value = item.split("=", 1)
+                    env[key] = value
+            idx += 2
+        return env
+
     def _run_bash(self, cmd_string: str, *, login: bool = False,
                   timeout: int = 120,
                   stdin_data: str | None = None) -> subprocess.Popen:
@@ -574,6 +617,34 @@ class DockerEnvironment(BaseEnvironment):
         cmd = [self._docker_exe, "exec"]
         if stdin_data is not None:
             cmd.append("-i")
+
+
+        # AB_HARNESS_HERMES_PATCH_EXEC_BRIDGE_RUN_BEGIN
+        if self._bridge:
+            env = dict(os.environ)
+            # The shared Agent_Bench bridge client currently reads the
+            # historical OPENCLAW_* names; provide them here while keeping the
+            # Hermes-facing trigger/env as HERMES_EXEC_BRIDGE*.
+            env["OPENCLAW_EXEC_BRIDGE_SOCKET"] = self._bridge_socket
+            env["OPENCLAW_EXEC_BRIDGE_TOKEN"] = self._bridge_token
+
+            shell_argv = ["bash"]
+            if login:
+                shell_argv.append("-l")
+            shell_argv.extend(["-c", cmd_string])
+            bridge_env = (
+                self._env_args_to_dict(self._init_env_args)
+                if login else {}
+            )
+            bridge_cmd = [
+                self._bridge,
+                "--workdir", self.cwd,
+                "--env-json", json.dumps(bridge_env),
+                "--argv-json", json.dumps(shell_argv),
+                "--timeout-ms", str(int(timeout * 1000)),
+            ]
+            return _popen_bash(bridge_cmd, stdin_data, env=env)
+        # AB_HARNESS_HERMES_PATCH_EXEC_BRIDGE_RUN_END
 
         # Only inject -e env args during init_session (login=True).
         # Subsequent commands get env vars from the snapshot.
@@ -631,6 +702,11 @@ class DockerEnvironment(BaseEnvironment):
 
     def cleanup(self):
         """Stop and remove the container. Bind-mount dirs persist if persistent=True."""
+        # AB_HARNESS_HERMES_PATCH_EXEC_BRIDGE_CLEANUP_BEGIN
+        if getattr(self, "_bridge", ""):
+            self._container_id = None
+            return
+        # AB_HARNESS_HERMES_PATCH_EXEC_BRIDGE_CLEANUP_END
         if self._container_id:
             try:
                 # Stop in background so cleanup doesn't block
