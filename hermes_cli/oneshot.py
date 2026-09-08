@@ -152,6 +152,17 @@ def run_oneshot(
     # not host it), and silently picking the provider's catalog default hides
     # the mismatch.  Require the caller to be explicit.  Validate BEFORE the
     # stderr redirect so the message actually reaches the terminal.
+    # AB_HARNESS_HERMES_PATCH_ONESHOT_PROMPT_FILE_BEGIN
+    # `-z @/path` reads the prompt from a file. The prompt otherwise sits on the
+    # process command line, where every same-UID process on the node can see it
+    # (enroot shares the host pid namespace). A sandboxed agent running
+    # `pkill -f <word>` for a word in that boilerplate killed all 31 sibling
+    # Hermes runs on a B200 node on 2026-09-08. Same-file semantics as before
+    # when the value does not start with "@" or names no readable file.
+    if isinstance(prompt, str) and prompt.startswith("@") and os.path.isfile(prompt[1:]):
+        with open(prompt[1:], encoding="utf-8") as _pf:
+            prompt = _pf.read()
+    # AB_HARNESS_HERMES_PATCH_ONESHOT_PROMPT_FILE_END
     env_model_early = os.getenv("HERMES_INFERENCE_MODEL", "").strip()
     if provider and not ((model or "").strip() or env_model_early):
         sys.stderr.write(
